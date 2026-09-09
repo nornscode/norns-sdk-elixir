@@ -122,8 +122,11 @@ defmodule NornsSdk.Worker do
 
   defp execute_llm(task, api_key) do
     model_str = task["model"] || "claude-sonnet-5"
-    system_prompt = task["system_prompt"] || ""
-    messages = task["messages"] || []
+    # Core sends the def's prompt verbatim and never writes prose for the
+    # model: the worker composes the prompt, renders kinded messages, elides
+    # old tool results, and decides the final output.
+    system_prompt = Format.compose_system_prompt(task)
+    messages = (task["messages"] || []) |> Format.render_messages() |> Format.elide_old_tool_results()
     tools = task["tools"] || []
 
     # Normalize model string to ReqLLM format (e.g. "anthropic:claude-sonnet-5")
@@ -141,7 +144,8 @@ defmodule NornsSdk.Worker do
 
     case ReqLLM.generate_text(model_id, context, opts) do
       {:ok, response} ->
-        Format.from_req_llm_response(response)
+        result = Format.from_req_llm_response(response)
+        Map.put(result, "final_output", Format.final_output(messages, result["content"]))
 
       {:error, reason} ->
         Logger.error("LLM call failed: #{inspect(reason)}")

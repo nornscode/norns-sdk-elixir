@@ -238,6 +238,67 @@ defmodule NornsSdk.FormatTest do
     assert tool_msg.tool_call_id == "tc_1"
   end
 
+  # --- worker-side rendering (opaque content) ---
+
+  test "composes the system prompt from the envelope" do
+    assert Format.compose_system_prompt(%{"system_prompt" => "You help.", "summary" => "Likes cats.", "date" => "2026-09-09"}) ==
+             "You help.\n\nSummary of earlier conversation: Likes cats.\n\nCurrent date: 2026-09-09."
+
+    assert Format.compose_system_prompt(%{"system_prompt" => "You help."}) == "You help."
+  end
+
+  test "renders kinded messages and passes plain ones through" do
+    plain = %{"role" => "user", "content" => "hi"}
+    assert Format.render_message(plain) == plain
+
+    assert %{"content" => "Timer completed."} =
+             Format.render_message(%{"role" => "tool", "kind" => "timer_completed", "data" => %{}, "content" => ""})
+
+    assert %{"content" => "Tool 'send_email' is not in this agent's allowed tools."} =
+             Format.render_message(%{"role" => "tool", "kind" => "tool_denied", "data" => %{"tool_name" => "send_email"}, "content" => ""})
+
+    rendered = Format.render_message(%{"role" => "user", "kind" => "inherited_context", "content" => %{"ticket_id" => "T-123"}})
+    assert rendered["content"] == "[Inherited context from parent agent]\n{\"ticket_id\":\"T-123\"}"
+    refute Map.has_key?(rendered, "kind")
+
+    done = Format.render_message(%{"role" => "tool", "kind" => "subagent_completed", "data" => %{"run_id" => 7, "status" => "completed"}, "content" => "42"})
+    assert Jason.decode!(done["content"]) == %{"run_id" => 7, "status" => "completed", "output" => "42"}
+  end
+
+  test "renders kinds inside to_req_llm_context" do
+    ctx = Format.to_req_llm_context([%{"role" => "tool", "tool_call_id" => "c1", "name" => "wait", "kind" => "timer_completed", "data" => %{}, "content" => ""}])
+    [msg] = ctx.messages
+    assert msg.role == :tool
+  end
+
+  test "elides only tool results older than the last two messages" do
+    long = String.duplicate("x", 500)
+
+    messages = [
+      %{"role" => "user", "content" => "go"},
+      %{"role" => "assistant", "content" => "", "tool_calls" => [%{"id" => "c1", "name" => "t", "arguments" => %{}}]},
+      %{"role" => "tool", "tool_call_id" => "c1", "content" => long},
+      %{"role" => "assistant", "content" => "", "tool_calls" => [%{"id" => "c2", "name" => "t", "arguments" => %{}}]},
+      %{"role" => "tool", "tool_call_id" => "c2", "content" => long}
+    ]
+
+    out = Format.elide_old_tool_results(messages)
+    assert Enum.at(out, 2)["content"] == String.duplicate("x", 200) <> "...(truncated)"
+    assert Enum.at(out, 4)["content"] == long
+    assert Format.elide_old_tool_results(Enum.take(messages, 4)) == Enum.take(messages, 4)
+  end
+
+  test "final_output falls back to the last substantive assistant turn" do
+    messages = [
+      %{"role" => "user", "content" => "go"},
+      %{"role" => "assistant", "content" => "Here's what I found.", "tool_calls" => [%{"id" => "c1", "name" => "t", "arguments" => %{}}]},
+      %{"role" => "tool", "tool_call_id" => "c1", "content" => "r"}
+    ]
+
+    assert Format.final_output(messages, "") == "Here's what I found."
+    assert Format.final_output(messages, "Done.") == "Done."
+  end
+
   # --- to_req_llm_tools/1 ---
 
   test "converts neutral tool defs to ReqLLM tools" do

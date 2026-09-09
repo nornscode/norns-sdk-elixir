@@ -38,10 +38,136 @@ defmodule NornsSdk.Format do
     end
   end
 
-  @doc "Convert neutral-format messages to a ReqLLM Context."
+  # --- Worker-side rendering ---
+  #
+  # The orchestrator never writes prose for the model ("Content is opaque",
+  # norns decision log, 2026-09-09). Where it used to — a timer result, a
+  # denied tool, a sub-agent's outcome, a parent's inherited context — the
+  # message carries a `kind` plus envelope `data`, and the worker renders it.
+  # The worker also composes the system prompt, elides old tool results, and
+  # decides the run's final output, because each needs to read text.
+
+  # Chars kept of a tool result once it has aged out of the last two messages.
+  @tool_result_cap 200
+
+  @doc """
+  The prompt the model sees: the def's prompt verbatim, then the conversation
+  summary and the date the orchestrator put in the task envelope.
+  """
+  @spec compose_system_prompt(map()) :: String.t()
+  def compose_system_prompt(task) do
+    prompt = task["system_prompt"] || ""
+    summary = task["summary"]
+    date = task["date"]
+
+    prompt
+    |> then(fn p -> if is_binary(summary) and summary != "", do: p <> "\n\nSummary of earlier conversation: " <> summary, else: p end)
+    |> then(fn p -> if date, do: p <> "\n\nCurrent date: #{date}.", else: p end)
+  end
+
+  @doc "Render a kinded message to plain content. Messages without a kind pass through."
+  @spec render_message(map()) :: map()
+  def render_message(%{"kind" => kind} = msg) when is_binary(kind) do
+    msg
+    |> Map.put("content", render_kind(kind, msg["data"] || %{}, msg["content"]))
+    |> Map.drop(["kind", "data"])
+  end
+
+  def render_message(msg), do: msg
+
+  @spec render_messages([map()]) :: [map()]
+  def render_messages(messages), do: Enum.map(messages, &render_message/1)
+
+  defp render_kind("inherited_context", _data, content) do
+    "[Inherited context from parent agent]\n" <> encode(content)
+  end
+
+  defp render_kind("timer_completed", _data, _content), do: "Timer completed."
+
+  defp render_kind("tool_denied", data, _content) do
+    "Tool '#{data["tool_name"]}' is not in this agent's allowed tools."
+  end
+
+  defp render_kind("subagent_denied", %{"reason" => "disabled"}, _content) do
+    "This agent is not permitted to launch sub-agents."
+  end
+
+  defp render_kind("subagent_denied", %{"reason" => "max_depth"} = data, _content) do
+    "Sub-agent nesting limit reached (max depth #{data["max_depth"]}). " <>
+      "Do the work in this agent instead of delegating further."
+  end
+
+  defp render_kind("subagent_denied", data, _content) do
+    "Agent '#{data["agent_name"]}' is not in this agent's allowed sub-agents."
+  end
+
+  defp render_kind("subagent_list_denied", _data, _content), do: "Listing agents is not permitted for this agent."
+  defp render_kind("subagent_not_found", data, _content), do: "Agent '#{data["agent_name"]}' not found"
+  defp render_kind("subagent_self", _data, _content), do: "Cannot launch self as a sub-agent"
+
+  defp render_kind("subagent_missing", data, _content) do
+    "Sub-agent run #{data["run_id"]} no longer exists, so its result cannot be recovered."
+  end
+
+  defp render_kind("subagent_launch_failed", data, _content) do
+    "Failed to launch agent '#{data["agent_name"]}': #{data["reason"]}"
+  end
+
+  defp render_kind("subagent_completed", data, content) do
+    Jason.encode!(%{"run_id" => data["run_id"], "status" => "completed", "output" => content || ""})
+  end
+
+  defp render_kind("subagent_failed", data, content) do
+    Jason.encode!(%{"run_id" => data["run_id"], "status" => "failed", "error" => content || ""})
+  end
+
+  defp render_kind("list_agents", data, _content), do: Jason.encode!(data["agents"] || [])
+  defp render_kind(_unknown, data, content) when content in [nil, ""], do: encode(data)
+  defp render_kind(_unknown, _data, content), do: encode(content)
+
+  defp encode(value) when is_binary(value), do: value
+  defp encode(value), do: Jason.encode!(value)
+
+  @doc "Cap tool results older than the last two messages."
+  @spec elide_old_tool_results([map()]) :: [map()]
+  def elide_old_tool_results(messages) when length(messages) <= 4, do: messages
+
+  def elide_old_tool_results(messages) do
+    {old, recent} = Enum.split(messages, length(messages) - 2)
+
+    Enum.map(old, fn
+      %{"role" => "tool", "content" => content} = msg when is_binary(content) and byte_size(content) > @tool_result_cap ->
+        Map.put(msg, "content", String.slice(content, 0, @tool_result_cap) <> "...(truncated)")
+
+      msg ->
+        msg
+    end) ++ recent
+  end
+
+  @doc """
+  The run's output when the model stops. A turn can say something substantive
+  alongside a tool call and then end with an empty "stop" turn; fall back to
+  the last non-empty assistant text rather than losing it.
+  """
+  @spec final_output([map()], term()) :: String.t()
+  def final_output(messages, content) do
+    text = if is_binary(content), do: content, else: ""
+
+    if String.trim(text) == "" do
+      Enum.find_value(Enum.reverse(messages), text, fn
+        %{"role" => "assistant", "content" => c} when is_binary(c) -> if String.trim(c) == "", do: nil, else: c
+        _ -> nil
+      end)
+    else
+      text
+    end
+  end
+
+  @doc "Convert neutral-format messages to a ReqLLM Context. Kinded messages are rendered first."
   @spec to_req_llm_context([map()]) :: Context.t()
   def to_req_llm_context(messages) do
     messages
+    |> render_messages()
     |> Enum.map(&neutral_msg_to_req_llm/1)
     |> Context.new()
   end
@@ -188,7 +314,7 @@ defmodule NornsSdk.Format do
   end
 
   defp neutral_msg_to_req_llm(%{"role" => "user", "content" => content}) do
-    Context.user(content)
+    Context.user(encode(content))
   end
 
   defp neutral_msg_to_req_llm(%{"role" => "system", "content" => content}) do

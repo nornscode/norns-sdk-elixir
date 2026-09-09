@@ -5,6 +5,15 @@ All notable changes to `norns_sdk` are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Worker-side rendering for the opaque-content protocol (norns "Content is
+  opaque", 2026-09-09). `NornsSdk.Format.compose_system_prompt/1` builds the
+  prompt from the def's prompt plus the `summary` and `date` in the task
+  envelope; `render_message/1` turns kinded messages (`timer_completed`,
+  `tool_denied`, `subagent_*`, `list_agents`, `inherited_context`) into the
+  text the model used to see; `elide_old_tool_results/1` caps results older
+  than the last two turns; `final_output/2` keeps the last substantive text
+  when the final turn is empty. The worker reports `final_output` on every
+  LLM result.
 - Human-in-the-loop support. `NornsSdk.WaitingFor` carries the question a run is
   parked on; `RunResponse` and `MessageResult` gain a `waiting_for` field and a
   `waiting?/1` helper.
