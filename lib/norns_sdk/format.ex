@@ -154,14 +154,17 @@ defmodule NornsSdk.Format do
     text = if is_binary(content), do: content, else: ""
 
     if String.trim(text) == "" do
-      Enum.find_value(Enum.reverse(messages), text, fn
-        %{"role" => "assistant", "content" => c} when is_binary(c) -> if String.trim(c) == "", do: nil, else: c
-        _ -> nil
-      end)
+      Enum.find_value(Enum.reverse(messages), text, &substantive_assistant_text/1)
     else
       text
     end
   end
+
+  defp substantive_assistant_text(%{"role" => "assistant", "content" => c}) when is_binary(c) do
+    if String.trim(c) == "", do: nil, else: c
+  end
+
+  defp substantive_assistant_text(_msg), do: nil
 
   @doc "Convert neutral-format messages to a ReqLLM Context. Kinded messages are rendered first."
   @spec to_req_llm_context([map()]) :: Context.t()
