@@ -2,7 +2,7 @@
 
 All notable changes to `norns_sdk` are documented in this file.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-09
 
 ### Added
 - Worker-side rendering for the opaque-content protocol (norns "Content is

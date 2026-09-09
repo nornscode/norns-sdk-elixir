@@ -9,7 +9,7 @@ Elixir SDK for [Norns](https://github.com/nornscode/norns). Define agents and to
 ## Install
 
 ```elixir
-{:norns_sdk, "~> 0.1"}
+{:norns_sdk, "~> 0.2"}
 ```
 
 ## Quickstart
