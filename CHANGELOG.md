@@ -2,6 +2,20 @@
 
 All notable changes to `norns_sdk` are documented in this file.
 
+## [0.3.0] - 2026-09-09
+
+### Added
+- Compaction (norns 2026-09-09). The worker serves `purpose: "compact"`
+  tasks: `NornsSdk.Format.compose_compaction_prompt/1` and
+  `compaction_messages/1` build the summarisation call from the def's
+  prompt, the earlier summary, and the folded history; the summary goes back
+  as content. `NornsSdk.Agent` gains `context_policy`
+  (`%{compact_at: tokens, keep: messages}`), registered in `model_config`.
+
+### Changed
+- `Format.messages_for_task/1` replaces the unconditional elision: tool
+  results are elided only when the envelope carries no `context_policy`.
+
 ## [0.2.0] - 2026-09-09
 
 ### Added

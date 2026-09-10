@@ -372,4 +372,44 @@ defmodule NornsSdk.FormatTest do
 
     assert Format.from_req_llm_response(response)["finish_reason"] == "length"
   end
+
+  describe "compaction" do
+    test "compose_compaction_prompt/1 carries the def prompt and the earlier summary" do
+      assert Format.compose_compaction_prompt(%{"system_prompt" => "P", "summary" => "S"}) ==
+               "P\n\nSummary of earlier conversation: S"
+
+      assert Format.compose_compaction_prompt(%{"system_prompt" => "P"}) == "P"
+    end
+
+    test "compaction_messages/1 renders the folded history and ends with the instruction" do
+      task = %{
+        "messages" => [
+          %{"role" => "user", "content" => "go"},
+          %{"role" => "tool", "tool_call_id" => "c1", "name" => "wait", "kind" => "timer_completed", "data" => %{}, "content" => ""}
+        ]
+      }
+
+      messages = Format.compaction_messages(task)
+      assert [%{"role" => "user", "content" => "go"}, %{"role" => "tool", "content" => "Timer completed."}, %{"role" => "user", "content" => instruction}] = messages
+      assert instruction =~ "Write a summary of the conversation so far"
+    end
+
+    test "messages_for_task/1 skips elision when core manages the context" do
+      big = String.duplicate("x", 300)
+
+      messages = [
+        %{"role" => "user", "content" => "a"},
+        %{"role" => "tool", "tool_call_id" => "c1", "name" => "t", "content" => big},
+        %{"role" => "assistant", "content" => "b"},
+        %{"role" => "user", "content" => "c"},
+        %{"role" => "assistant", "content" => "d"}
+      ]
+
+      assert [_, %{"content" => elided} | _] = Format.messages_for_task(%{"messages" => messages})
+      assert String.length(elided) < 300
+
+      assert [_, %{"content" => ^big} | _] =
+               Format.messages_for_task(%{"messages" => messages, "context_policy" => %{"compact_at" => 1, "keep" => 1}})
+    end
+  end
 end

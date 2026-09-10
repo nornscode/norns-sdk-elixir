@@ -128,6 +128,43 @@ defmodule NornsSdk.Format do
   defp encode(value) when is_binary(value), do: value
   defp encode(value), do: Jason.encode!(value)
 
+  @compaction_instruction "Write a summary of the conversation so far for your own future reference. " <>
+                            "You will continue the same task with only this summary and the most recent " <>
+                            "messages, so keep every fact you would need: the task and its constraints, " <>
+                            "decisions made and why, files and identifiers touched, what was tried and " <>
+                            "failed, what remains to be done, and anything the user asked for that is not " <>
+                            "finished. Fold in the earlier summary if there is one. Write prose or terse " <>
+                            "notes, no preamble, no commentary about summarising."
+
+  @doc """
+  The system prompt for a `purpose: "compact"` task: the def's prompt (so the
+  summary is written from the agent's point of view) plus the earlier summary.
+  """
+  @spec compose_compaction_prompt(map()) :: String.t()
+  def compose_compaction_prompt(task) do
+    prompt = task["system_prompt"] || ""
+    summary = task["summary"]
+
+    if is_binary(summary) and summary != "" do
+      prompt <> "\n\nSummary of earlier conversation: " <> summary
+    else
+      prompt
+    end
+  end
+
+  @doc "The messages for a compaction call: the folded history, rendered, then the instruction."
+  @spec compaction_messages(map()) :: [map()]
+  def compaction_messages(task) do
+    render_messages(task["messages"] || []) ++ [%{"role" => "user", "content" => @compaction_instruction}]
+  end
+
+  @doc "Rendered messages, elided unless core manages the context itself (`context_policy` in the envelope)."
+  @spec messages_for_task(map()) :: [map()]
+  def messages_for_task(task) do
+    rendered = render_messages(task["messages"] || [])
+    if task["context_policy"], do: rendered, else: elide_old_tool_results(rendered)
+  end
+
   @doc "Cap tool results older than the last two messages."
   @spec elide_old_tool_results([map()]) :: [map()]
   def elide_old_tool_results(messages) when length(messages) <= 4, do: messages

@@ -42,4 +42,10 @@ defmodule NornsSdk.AgentTest do
     assert reg["on_failure"] == "retry_last_step"
     assert is_list(reg["tools"])
   end
+
+  test "registers context_policy with a default keep" do
+    agent = Agent.new(name: "a", context_policy: %{compact_at: 100_000}, context_strategy: :none)
+    assert Agent.to_registration(agent)["context_policy"] == %{"compact_at" => 100_000, "keep" => 20}
+    assert Agent.to_registration(Agent.new(name: "b"))["context_policy"] == nil
+  end
 end

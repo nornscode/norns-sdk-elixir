@@ -327,7 +327,8 @@ defmodule NornsSdk.Client do
         "checkpoint_policy" => to_string(agent.checkpoint_policy),
         "context_strategy" => to_string(agent.context_strategy),
         "context_window" => agent.context_window,
-        "on_failure" => to_string(agent.on_failure)
+        "on_failure" => to_string(agent.on_failure),
+        "context_policy" => NornsSdk.Agent.context_policy(agent)
       }
     }
   end

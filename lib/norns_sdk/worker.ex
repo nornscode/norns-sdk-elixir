@@ -120,22 +120,35 @@ defmodule NornsSdk.Worker do
   # --- LLM Execution ---
   # Receives tasks in neutral format, calls LLM via ReqLLM, returns neutral format.
 
+  # Core sends the def's prompt verbatim and never writes prose for the
+  # model: the worker composes the prompt, renders kinded messages, elides
+  # old tool results (unless core manages the context), and decides the
+  # final output. A `purpose: "compact"` task is a summarisation call whose
+  # answer goes back as content.
+  defp execute_llm(%{"purpose" => "compact"} = task, api_key) do
+    messages = Format.compaction_messages(task)
+
+    case call_model(task, Format.compose_compaction_prompt(task), messages, [], api_key) do
+      {:ok, result} ->
+        %{"status" => "ok", "content" => result["content"] || "", "finish_reason" => "stop", "usage" => result["usage"]}
+
+      error ->
+        error
+    end
+  end
+
   defp execute_llm(task, api_key) do
-    model_str = task["model"] || "claude-sonnet-5"
-    # Core sends the def's prompt verbatim and never writes prose for the
-    # model: the worker composes the prompt, renders kinded messages, elides
-    # old tool results, and decides the final output.
-    system_prompt = Format.compose_system_prompt(task)
-    messages = (task["messages"] || []) |> Format.render_messages() |> Format.elide_old_tool_results()
-    tools = task["tools"] || []
+    messages = Format.messages_for_task(task)
 
-    # Normalize model string to ReqLLM format (e.g. "anthropic:claude-sonnet-5")
-    model_id = Format.normalize_model(model_str)
+    case call_model(task, Format.compose_system_prompt(task), messages, task["tools"] || [], api_key) do
+      {:ok, result} -> Map.put(result, "final_output", Format.final_output(messages, result["content"]))
+      error -> error
+    end
+  end
 
-    # Build ReqLLM context from neutral messages
+  defp call_model(task, system_prompt, messages, tools, api_key) do
+    model_id = Format.normalize_model(task["model"] || "claude-sonnet-5")
     context = Format.to_req_llm_context(messages)
-
-    # Build ReqLLM tool definitions
     req_tools = Format.to_req_llm_tools(tools)
 
     opts =
@@ -144,8 +157,7 @@ defmodule NornsSdk.Worker do
 
     case ReqLLM.generate_text(model_id, context, opts) do
       {:ok, response} ->
-        result = Format.from_req_llm_response(response)
-        Map.put(result, "final_output", Format.final_output(messages, result["content"]))
+        {:ok, Format.from_req_llm_response(response)}
 
       {:error, reason} ->
         Logger.error("LLM call failed: #{inspect(reason)}")

@@ -25,7 +25,11 @@ defmodule NornsSdk.Agent do
     context_strategy: :sliding_window,
     context_window: 20,
     max_steps: 50,
-    on_failure: :retry_last_step
+    on_failure: :retry_last_step,
+    # %{compact_at: input_tokens, keep: messages}: fold older history into a
+    # summary once a response reports compact_at tokens. Pair it with
+    # context_strategy: :none; the summarisation is served by this worker.
+    context_policy: nil
   ]
 
   @type t :: %__MODULE__{
@@ -38,7 +42,8 @@ defmodule NornsSdk.Agent do
           context_strategy: :sliding_window | :none,
           context_window: pos_integer(),
           max_steps: pos_integer(),
-          on_failure: :stop | :retry_last_step
+          on_failure: :stop | :retry_last_step,
+          context_policy: nil | %{compact_at: pos_integer(), keep: pos_integer()}
         }
 
   def new(opts) when is_list(opts) do
@@ -56,7 +61,14 @@ defmodule NornsSdk.Agent do
       "context_window" => agent.context_window,
       "max_steps" => agent.max_steps,
       "on_failure" => Atom.to_string(agent.on_failure),
+      "context_policy" => context_policy(agent),
       "tools" => Enum.map(agent.tools, fn mod -> mod.__tool_name__() end)
     }
   end
+
+  @doc false
+  def context_policy(%__MODULE__{context_policy: %{compact_at: at} = policy}),
+    do: %{"compact_at" => at, "keep" => Map.get(policy, :keep, 20)}
+
+  def context_policy(_agent), do: nil
 end
