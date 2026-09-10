@@ -8,8 +8,8 @@ on:
 permissions:
   contents: read
 
+# No MIX_ENV pin: hex.publish builds docs with ex_doc, a dev-only dep.
 env:
-  MIX_ENV: prod
   ELIXIR_VERSION: "1.18.4"
   OTP_VERSION: "27.3"
 
