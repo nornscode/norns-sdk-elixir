@@ -412,4 +412,71 @@ defmodule NornsSdk.FormatTest do
                Format.messages_for_task(%{"messages" => messages, "context_policy" => %{"compact_at" => 1, "keep" => 1}})
     end
   end
+  # --- usage and model for pricing ---
+
+  defp req_llm_response(usage) do
+    %ReqLLM.Response{
+      id: "test",
+      model: "anthropic:claude-sonnet-4-20250514",
+      context: ReqLLM.Context.new(),
+      message: %ReqLLM.Message{role: :assistant, content: [ContentPart.text("Hi.")]},
+      finish_reason: :stop,
+      usage: usage
+    }
+  end
+
+  test "counts Anthropic cache reads and writes inside input_tokens, and says how many" do
+    # Anthropic's input_tokens leaves the cache out; core's includes it.
+    usage = %{
+      input_tokens: 400,
+      output_tokens: 5,
+      cache_read_input_tokens: 3_000,
+      cache_creation_input_tokens: 600,
+      cached_tokens: 3_000,
+      cache_creation_tokens: 600
+    }
+
+    result = Format.from_req_llm_response(req_llm_response(usage))
+
+    assert result["usage"] == %{
+             "input_tokens" => 4_000,
+             "output_tokens" => 5,
+             "cache_read_tokens" => 3_000,
+             "cache_write_tokens" => 600
+           }
+
+    assert result["model"] == "anthropic:claude-sonnet-4-20250514"
+  end
+
+  test "leaves input_tokens alone where the provider already counts the cache in it" do
+    usage = %{input_tokens: 4_000, output_tokens: 5, prompt_tokens_details: %{cached_tokens: 3_000}}
+
+    result = Format.from_req_llm_response(req_llm_response(usage))
+    assert result["usage"] == %{"input_tokens" => 4_000, "output_tokens" => 5, "cache_read_tokens" => 3_000}
+  end
+
+  test "an Anthropic body's cache counts and model reach the neutral result" do
+    body = %{
+      "content" => [%{"type" => "text", "text" => "Hi."}],
+      "stop_reason" => "end_turn",
+      "model" => "claude-sonnet-4-20250514",
+      "usage" => %{
+        "input_tokens" => 400,
+        "output_tokens" => 5,
+        "cache_read_input_tokens" => 3_000,
+        "cache_creation_input_tokens" => 600
+      }
+    }
+
+    result = Format.from_anthropic_response(body)
+
+    assert result["usage"] == %{
+             "input_tokens" => 4_000,
+             "output_tokens" => 5,
+             "cache_read_tokens" => 3_000,
+             "cache_write_tokens" => 600
+           }
+
+    assert result["model"] == "claude-sonnet-4-20250514"
+  end
 end

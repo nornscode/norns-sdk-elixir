@@ -131,6 +131,7 @@ defmodule NornsSdk.Worker do
     case call_model(task, Format.compose_compaction_prompt(task), messages, [], api_key) do
       {:ok, result} ->
         %{"status" => "ok", "content" => result["content"] || "", "finish_reason" => "stop", "usage" => result["usage"]}
+        |> Map.merge(Map.take(result, ["model"]))
 
       error ->
         error

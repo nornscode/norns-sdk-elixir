@@ -243,6 +243,8 @@ defmodule NornsSdk.Format do
       "usage" => normalize_usage(response.usage)
     }
 
+    result = put_model(result, response.model)
+
     if tool_calls != [] do
       Map.put(result, "tool_calls", tool_calls)
     else
@@ -271,12 +273,26 @@ defmodule NornsSdk.Format do
 
   defp normalize_usage(nil), do: %{"input_tokens" => 0, "output_tokens" => 0}
 
+  # Core counts cache reads and writes inside input_tokens and wants to know
+  # how many of each, since providers price them differently. Anthropic
+  # leaves them out of its input count; ReqLLM says which kind this is.
   defp normalize_usage(usage) do
-    %{
-      "input_tokens" => usage[:input_tokens] || usage["input_tokens"] || 0,
-      "output_tokens" => usage[:output_tokens] || usage["output_tokens"] || 0
-    }
+    n = ReqLLM.Usage.normalize(usage)
+    read = n.cached_input || 0
+    write = n.cache_creation || 0
+    input = if n.input_includes_cached, do: n.input_tokens, else: n.input_tokens + read + write
+
+    %{"input_tokens" => input, "output_tokens" => n.output_tokens}
+    |> put_count("cache_read_tokens", read)
+    |> put_count("cache_write_tokens", write)
   end
+
+  defp put_count(usage, key, n) when is_integer(n) and n > 0, do: Map.put(usage, key, n)
+  defp put_count(usage, _key, _n), do: usage
+
+  # The model that served the call, so core can price it from the event.
+  defp put_model(result, model) when is_binary(model) and model != "", do: Map.put(result, "model", model)
+  defp put_model(result, _model), do: result
 
   # --- Neutral → Anthropic API (kept for direct API use / testing) ---
 
@@ -330,8 +346,10 @@ defmodule NornsSdk.Format do
       "status" => "ok",
       "content" => text,
       "finish_reason" => finish_reason,
-      "usage" => body["usage"] || %{}
+      "usage" => anthropic_usage(body["usage"])
     }
+
+    result = put_model(result, body["model"])
 
     if tool_calls != [] do
       Map.put(result, "tool_calls", tool_calls)
@@ -339,6 +357,18 @@ defmodule NornsSdk.Format do
       result
     end
   end
+
+  # Anthropic's input_tokens leaves out cache reads and writes; core's counts them.
+  defp anthropic_usage(%{"input_tokens" => input} = usage) when is_integer(input) do
+    read = usage["cache_read_input_tokens"] || 0
+    write = usage["cache_creation_input_tokens"] || 0
+
+    %{"input_tokens" => input + read + write, "output_tokens" => usage["output_tokens"] || 0}
+    |> put_count("cache_read_tokens", read)
+    |> put_count("cache_write_tokens", write)
+  end
+
+  defp anthropic_usage(_usage), do: %{}
 
   # --- Internal helpers ---
 
