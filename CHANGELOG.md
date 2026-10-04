@@ -2,6 +2,20 @@
 
 All notable changes to `norns_sdk` are documented in this file.
 
+## [0.3.1] - 2026-10-04
+
+### Fixed
+- `input_tokens` now counts cache reads and writes, as norns expects. ReqLLM
+  passes Anthropic's count through unchanged, and it leaves the cache out, so
+  workers under-reported input (by ~90% on well-cached prompts) and
+  `compact_at` fired late. `Format.from_anthropic_response/1` had the same
+  gap.
+
+### Added
+- LLM results carry `usage.cache_read_tokens` and `usage.cache_write_tokens`
+  when the provider reports them, and `model`, the model that served the
+  call. Norns keeps both on the call's event to price it (norns 2026-10-04).
+
 ## [0.3.0] - 2026-09-09
 
 ### Added
