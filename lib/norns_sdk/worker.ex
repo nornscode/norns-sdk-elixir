@@ -58,7 +58,9 @@ defmodule NornsSdk.Worker do
       llm_api_key: llm_api_key,
       agent: agent,
       worker_id: worker_id,
-      tools_by_name: tools_by_name
+      tools_by_name: tools_by_name,
+      # The message list Norns last sent us, per run (NornsSdk.History).
+      history: NornsSdk.History.new()
     }
 
     {:ok, state, {:connect, ws_url}}
@@ -71,10 +73,16 @@ defmodule NornsSdk.Worker do
     join_payload = %{
       "worker_id" => state.worker_id,
       "tools" => Enum.map(state.agent.tools, fn mod -> mod.to_registration() end),
-      "capabilities" => ["llm", "tools"]
+      "capabilities" => ["llm", "tools"],
+      # This worker keeps the history it was last sent per run, so Norns may
+      # send later steps as the change only (NornsSdk.History).
+      "features" => ["message_cache"]
     }
 
     Logger.info("Connected to Norns, joining worker:lobby as #{state.worker_id}")
+    # Norns sends deltas only on the connection it sent the history on, so a
+    # new connection starts with nothing to be stale.
+    socket = assign(socket, :history, NornsSdk.History.new())
     {:ok, join(socket, "worker:lobby", join_payload)}
   end
 
@@ -88,12 +96,28 @@ defmodule NornsSdk.Worker do
   def handle_message("worker:lobby", "llm_task", payload, socket) do
     state = socket.assigns
 
-    Task.start(fn ->
-      result = execute_llm(payload, state.llm_api_key)
-      push(socket, "worker:lobby", "tool_result", Map.put(result, "task_id", payload["task_id"]))
-    end)
+    case NornsSdk.History.resolve(payload, state.history) do
+      {:ok, task, history} ->
+        Task.start(fn ->
+          result = execute_llm(task, state.llm_api_key)
+          push(socket, "worker:lobby", "tool_result", Map.put(result, "task_id", payload["task_id"]))
+        end)
 
-    {:ok, socket}
+        {:ok, assign(socket, :history, history)}
+
+      # The delta was built on a history this worker no longer holds. Norns
+      # resends the whole list at the same step; no retry counted.
+      :miss ->
+        Logger.info("LLM task arrived as a delta on an unknown base; asking for the full history")
+
+        push(socket, "worker:lobby", "tool_result", %{
+          "status" => "error",
+          "error" => "message_cache_miss",
+          "task_id" => payload["task_id"]
+        })
+
+        {:ok, socket}
+    end
   end
 
   def handle_message("worker:lobby", "tool_task", payload, socket) do

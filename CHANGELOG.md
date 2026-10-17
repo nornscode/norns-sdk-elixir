@@ -2,6 +2,16 @@
 
 All notable changes to `norns_sdk` are documented in this file.
 
+## [Unreleased]
+
+### Added
+- The worker joins with `features: ["message_cache"]` and keeps the message
+  list Norns last sent it per run (`NornsSdk.History`), so Norns can send
+  later steps as `messages_delta` (the change) instead of the whole history.
+  A delta on a base the worker no longer holds is answered with
+  `message_cache_miss` and Norns resends in full. Older Norns ignores the
+  feature and sends the full list as before.
+
 ## [0.3.1] - 2026-10-04
 
 ### Fixed
